@@ -124,3 +124,45 @@ describe("update 樂觀鎖", () => {
     expect(() => repo.update("missing", { ...input, version: 1, baseHash: "sha256:x" }, "demo@example.com", "op")).toThrowError(/ROW_NOT_FOUND/);
   });
 });
+
+describe("simulateExternal", () => {
+  it("改變業務欄位但不遞增 _version，並留下 external 稽核", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    const result = repo.simulateExternal(created._row_id);
+    expect(result.row._version).toBe(1);
+    expect(result.row.content_hash).not.toBe(created.content_hash);
+    expect(result.row.status).not.toBe("active");
+    expect(result.row.stale).toBe(true);
+    expect(result.audit?.source).toBe("external");
+    expect(result.audit?.actorLabel).toBe("unknown (Sheet)");
+  });
+
+  it("外部修改後，UI 以最新 version + hash 寫入即可清除 stale", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    const external = repo.simulateExternal(created._row_id).row;
+    const mine = {
+      project_name: external.project_name,
+      client: external.client,
+      status: external.status,
+      owner: external.owner,
+      amount: external.amount,
+      notes: "UI 補述",
+    };
+    const result = repo.update(
+      created._row_id,
+      { ...mine, version: external._version, baseHash: external.content_hash },
+      "demo@example.com",
+      "op-2",
+    );
+    expect(result.row.stale).toBe(false);
+    expect(result.row._version).toBe(2);
+  });
+
+  it("audit 回傳新到舊", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    repo.simulateExternal(created._row_id);
+    const events = repo.audit(created._row_id);
+    expect(events[0].source).toBe("external");
+    expect(events[1].action).toBe("create");
+  });
+});

@@ -3,24 +3,22 @@ import { diffFields, pickFields } from "./diff";
 import { hashFields } from "./hash";
 import { RowNotFoundError, VersionConflictError, type SheetRepository, type WriteResult } from "./repository";
 import type { AuditEvent, ProjectFields, RowView, SheetRow, UpdateRowInput } from "./schema";
+import { STATUSES } from "./schema";
 import type { Store } from "./store";
 
 export class FakeSheetRepository implements SheetRepository {
   constructor(private readonly store: Store) {}
 
-  private lastAuditTime(rowId: string, source: "ui" | "external"): string | null {
-    let latest: string | null = null;
+  private lastAuditSource(rowId: string): "ui" | "external" | null {
+    let source: "ui" | "external" | null = null;
     for (const event of this.store.audits) {
-      if (event.rowId !== rowId || event.source !== source) continue;
-      if (!latest || event.createdAt > latest) latest = event.createdAt;
+      if (event.rowId === rowId) source = event.source;
     }
-    return latest;
+    return source;
   }
 
   private toView(row: SheetRow): RowView {
-    const lastUi = this.lastAuditTime(row._row_id, "ui");
-    const lastExternal = this.lastAuditTime(row._row_id, "external");
-    const stale = lastExternal !== null && (lastUi === null || lastExternal > lastUi);
+    const stale = this.lastAuditSource(row._row_id) === "external";
     return { ...row, content_hash: hashFields(row), stale };
   }
 
@@ -99,8 +97,36 @@ export class FakeSheetRepository implements SheetRepository {
     return { row: this.toView(next), audit };
   }
 
-  simulateExternal(_rowId: string): WriteResult {
-    throw new Error("simulateExternal not implemented");
+  simulateExternal(rowId: string): WriteResult {
+    const row = this.store.rows.get(rowId);
+    if (!row) throw new RowNotFoundError(rowId);
+
+    const before = pickFields(row);
+    const nextStatus = STATUSES[(STATUSES.indexOf(before.status) + 1) % STATUSES.length];
+    const notes = `${before.notes}（外部修改）`.slice(0, 500);
+
+    const next: SheetRow = {
+      ...row,
+      status: nextStatus,
+      notes,
+      _updated_at: new Date().toISOString(),
+      _updated_by: "unknown (Sheet)",
+      _op_id: crypto.randomUUID(),
+    };
+    this.store.rows.set(rowId, next);
+
+    const audit = buildAuditEvent({
+      rowId,
+      actorLabel: "unknown (Sheet)",
+      source: "external",
+      action: "update",
+      before,
+      after: pickFields(next),
+      opId: null,
+    });
+    this.store.audits.push(audit);
+
+    return { row: this.toView(next), audit };
   }
 
   audit(rowId: string): AuditEvent[] {
