@@ -64,3 +64,63 @@ describe("list / get / create", () => {
     expect(repo.lastSyncedAt()).toBe(latest);
   });
 });
+
+describe("update 樂觀鎖", () => {
+  it("版本相符時寫入、版本 +1、產生 update 稽核", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    const result = repo.update(
+      created._row_id,
+      { ...input, status: "done", version: created._version, baseHash: created.content_hash },
+      "demo@example.com",
+      "op-2",
+    );
+    expect(result.row._version).toBe(2);
+    expect(result.row.status).toBe("done");
+    expect(result.audit?.action).toBe("update");
+    expect(result.audit?.diff).toEqual([{ field: "status", before: "active", after: "done" }]);
+  });
+
+  it("版本過期時丟 VersionConflictError 且不改資料", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    repo.update(created._row_id, { ...input, status: "done", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-2");
+    expect(() =>
+      repo.update(created._row_id, { ...input, status: "blocked", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-3"),
+    ).toThrowError(/VERSION_CONFLICT/);
+    expect(repo.get(created._row_id)?.status).toBe("done");
+  });
+
+  it("版本相同但 baseHash 過期時仍衝突（外部改過其他欄位）", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    getStore().rows.set(created._row_id, { ...getStore().rows.get(created._row_id)!, notes: "Sheet 直接改" });
+    expect(() =>
+      repo.update(created._row_id, { ...input, amount: 1, version: 1, baseHash: created.content_hash }, "demo@example.com", "op-2"),
+    ).toThrowError(/VERSION_CONFLICT/);
+    expect(repo.get(created._row_id)?.amount).toBe(120000);
+  });
+
+  it("無變更回 200 語意：不遞增版本、不寫稽核", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    const beforeAudits = repo.audit(created._row_id).length;
+    const result = repo.update(
+      created._row_id,
+      { ...input, version: 1, baseHash: created.content_hash },
+      "demo@example.com",
+      "op-2",
+    );
+    expect(result.row._version).toBe(1);
+    expect(result.audit).toBeNull();
+    expect(repo.audit(created._row_id)).toHaveLength(beforeAudits);
+  });
+
+  it("同一版本連續送出兩次，第二次衝突", () => {
+    const created = repo.create(input, "demo@example.com", "op-1").row;
+    repo.update(created._row_id, { ...input, status: "done", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-2");
+    expect(() =>
+      repo.update(created._row_id, { ...input, status: "blocked", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-3"),
+    ).toThrowError(/VERSION_CONFLICT/);
+  });
+
+  it("找不到列丟 RowNotFoundError", () => {
+    expect(() => repo.update("missing", { ...input, version: 1, baseHash: "sha256:x" }, "demo@example.com", "op")).toThrowError(/ROW_NOT_FOUND/);
+  });
+});
