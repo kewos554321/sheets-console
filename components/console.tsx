@@ -3,13 +3,33 @@
 import { useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { STATUSES, STATUS_LABELS, type ProjectStatus, type RowView } from "@/lib/schema";
+import { pickFields } from "@/lib/diff";
+import {
+  STATUSES,
+  STATUS_LABELS,
+  type ConflictPayload,
+  type ProjectFields,
+  type ProjectStatus,
+  type RowView,
+} from "@/lib/schema";
 import { DataTable } from "./data-table";
+import { RowFormDialog } from "./row-form-dialog";
 import { Button, Input, Select } from "./ui";
 
 type Props = {
   initialRows: RowView[];
   initialLastSyncedAt: string | null;
+};
+
+type FormState =
+  | { mode: "create" }
+  | { mode: "edit"; row: RowView; base: ProjectFields };
+
+type PendingConflict = {
+  rowId: string;
+  base: ProjectFields;
+  mine: ProjectFields;
+  conflict: ConflictPayload["conflict"];
 };
 
 export function Console({ initialRows, initialLastSyncedAt }: Props) {
@@ -20,6 +40,10 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [simulating, setSimulating] = useState(false);
+  const [form, setForm] = useState<FormState | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null);
 
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -40,8 +64,15 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
     setLastSyncedAt(data.lastSyncedAt);
   }
 
-  async function handleSimulateExternal() {
-    const target = selectedRowId ?? filteredRows[0]?._row_id;
+  function handleSelectRow(rowId: string) {
+    setSelectedRowId(rowId);
+    const row = rows.find((item) => item._row_id === rowId);
+    if (!row) return;
+    setFormError(null);
+    setForm({ mode: "edit", row, base: pickFields(row) });
+  }
+
+  async function handleSimulateExternal() {    const target = selectedRowId ?? filteredRows[0]?._row_id;
     if (!target) {
       setNotice("目前沒有可修改的列");
       return;
@@ -57,6 +88,53 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
       setNotice(error instanceof ApiError ? error.message : "模擬外部修改失敗");
     } finally {
       setSimulating(false);
+    }
+  }
+
+  async function handleSubmitForm(input: ProjectFields) {
+    const activeForm = form;
+    if (!activeForm) return;
+
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      if (activeForm.mode === "create") {
+        const result = await api.create(input);
+        await refresh();
+        setForm(null);
+        setSelectedRowId(result.row._row_id);
+        setNotice("已新增");
+      } else {
+        const result = await api.update(activeForm.row._row_id, {
+          ...input,
+          version: activeForm.row._version,
+          baseHash: activeForm.row.content_hash,
+        });
+        await refresh();
+        setForm(null);
+        setSelectedRowId(result.row._row_id);
+        setNotice("已儲存");
+      }
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.conflict &&
+        activeForm.mode === "edit"
+      ) {
+        setPendingConflict({
+          rowId: activeForm.row._row_id,
+          base: activeForm.base,
+          mine: input,
+          conflict: error.conflict,
+        });
+        setForm(null);
+        setNotice("偵測到衝突，請選擇要保留的版本");
+        return;
+      }
+      setFormError(error instanceof ApiError ? error.message : "儲存失敗");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -94,11 +172,19 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
           ))}
         </Select>
         <span className="text-sm text-slate-500">顯示 {filteredRows.length} 列</span>
+        <Button
+          onClick={() => {
+            setFormError(null);
+            setForm({ mode: "create" });
+          }}
+        >
+          新增
+        </Button>
         {notice ? <span className="text-sm text-blue-700">{notice}</span> : null}
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-        <DataTable rows={filteredRows} selectedRowId={selectedRowId} onSelect={setSelectedRowId} />
+        <DataTable rows={filteredRows} selectedRowId={selectedRowId} onSelect={handleSelectRow} />
 
         <aside className="rounded-xl border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-semibold text-slate-900">稽核紀錄</h2>
@@ -109,6 +195,26 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
           )}
         </aside>
       </div>
+
+      {form ? (
+        <RowFormDialog
+          title={form.mode === "create" ? "新增專案" : "編輯專案"}
+          initial={form.mode === "edit" ? form.base : null}
+          initialVersion={form.mode === "edit" ? form.row._version : undefined}
+          submitting={submitting}
+          serverError={formError}
+          onSubmit={handleSubmitForm}
+          onClose={() => {
+            if (!submitting) setForm(null);
+          }}
+        />
+      ) : null}
+
+      {pendingConflict ? (
+        <p className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md bg-amber-100 px-4 py-2 text-sm text-amber-900 shadow">
+          衝突待處理：版本 {pendingConflict.conflict.current._version}
+        </p>
+      ) : null}
     </div>
   );
 }
