@@ -7,7 +7,7 @@ import {
   useLegacyTable,
   type LegacyColumnDef,
 } from "@tanstack/react-table/legacy";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatAmount, formatDateTime } from "@/lib/format";
 import { STATUS_LABELS, type RowView } from "@/lib/schema";
 import { Badge, Button } from "./ui";
@@ -19,7 +19,7 @@ const STATUS_TONES = {
   done: "success",
 } as const;
 
-const columns: LegacyColumnDef<RowView>[] = [
+const BASE_COLUMNS: LegacyColumnDef<RowView>[] = [
   {
     accessorKey: "project_name",
     header: "專案名稱",
@@ -57,12 +57,39 @@ export function DataTable({
   rows,
   selectedRowId,
   onSelect,
+  onEdit,
 }: {
   rows: RowView[];
   selectedRowId: string | null;
   onSelect: (rowId: string) => void;
+  onEdit: (rowId: string) => void;
 }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "_updated_at", desc: true }]);
+
+  const columns = useMemo<LegacyColumnDef<RowView>[]>(
+    () => [
+      ...BASE_COLUMNS,
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="text-right">
+            <Button
+              variant="ghost"
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdit(row.original._row_id);
+              }}
+            >
+              編輯
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [onEdit],
+  );
 
   const table = useLegacyTable<RowView>({
     data: rows,
@@ -76,7 +103,7 @@ export function DataTable({
 
   useEffect(() => {
     table.setPageIndex(0);
-  }, [rows, table]);
+  }, [rows]);
 
   const pagination = table.getState().pagination;
 

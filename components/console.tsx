@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { pickFields } from "@/lib/diff";
 import {
   STATUSES,
   STATUS_LABELS,
+  type AuditEvent,
   type ConflictPayload,
   type ProjectFields,
   type ProjectStatus,
@@ -15,6 +16,7 @@ import {
 import { DataTable } from "./data-table";
 import { ConflictDialog } from "./conflict-dialog";
 import { RowFormDialog } from "./row-form-dialog";
+import { AuditPanel } from "./audit-panel";
 import { Button, Input, Select } from "./ui";
 
 type Props = {
@@ -46,6 +48,8 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null);
   const [resolving, setResolving] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -60,16 +64,43 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
 
   const selectedRow = rows.find((row) => row._row_id === selectedRowId) ?? null;
 
+  useEffect(() => {
+    if (!selectedRowId) {
+      setAuditEvents([]);
+      return;
+    }
+
+    let cancelled = false;
+    setAuditLoading(true);
+    api
+      .audit(selectedRowId)
+      .then(({ events }) => {
+        if (!cancelled) setAuditEvents(events);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setAuditEvents([]);
+        setNotice(error instanceof ApiError ? error.message : "稽核載入失敗");
+      })
+      .finally(() => {
+        if (!cancelled) setAuditLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRowId, rows]);
+
   async function refresh() {
     const data = await api.rows();
     setRows(data.rows);
     setLastSyncedAt(data.lastSyncedAt);
   }
 
-  function handleSelectRow(rowId: string) {
-    setSelectedRowId(rowId);
+  function handleEditRow(rowId: string) {
     const row = rows.find((item) => item._row_id === rowId);
     if (!row) return;
+    setSelectedRowId(rowId);
     setFormError(null);
     setForm({ mode: "edit", row, base: pickFields(row) });
   }
@@ -231,16 +262,25 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-        <DataTable rows={filteredRows} selectedRowId={selectedRowId} onSelect={handleSelectRow} />
+        <DataTable
+          rows={filteredRows}
+          selectedRowId={selectedRowId}
+          onSelect={setSelectedRowId}
+          onEdit={handleEditRow}
+        />
 
-        <aside className="rounded-xl border border-slate-200 bg-white p-4">
-          <h2 className="text-sm font-semibold text-slate-900">稽核紀錄</h2>
-          {selectedRow ? (
-            <p className="mt-2 text-sm text-slate-500">{selectedRow.project_name}</p>
-          ) : (
+        {selectedRow ? (
+          <AuditPanel
+            events={auditEvents}
+            loading={auditLoading}
+            rowLabel={selectedRow.project_name}
+          />
+        ) : (
+          <aside className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="text-sm font-semibold text-slate-900">稽核紀錄</h2>
             <p className="mt-2 text-sm text-slate-500">選取一列查看稽核</p>
-          )}
-        </aside>
+          </aside>
+        )}
       </div>
 
       {form ? (
