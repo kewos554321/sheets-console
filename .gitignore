@@ -14,6 +14,9 @@ dist/
 .env.*
 !.env.example
 
+# google service account keys
+secrets/
+
 # vercel
 .vercel
 
