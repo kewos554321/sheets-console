@@ -42,7 +42,8 @@ export function AuditPanel({
         <p className="mt-3 text-sm text-slate-500">此列尚無稽核紀錄</p>
       ) : null}
 
-      <ol className="mt-3 space-y-4">
+      {!loading ? (
+        <ol className="mt-3 space-y-4">
         {events.map((event) => (
           <li key={event.id} className="border-l-2 border-slate-200 pl-3">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -66,6 +67,7 @@ export function AuditPanel({
           </li>
         ))}
       </ol>
+      ) : null}
     </aside>
   );
 }

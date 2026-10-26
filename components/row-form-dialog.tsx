@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { parseAmountInput } from "@/lib/amount";
 import {
   projectFieldsSchema,
   STATUSES,
@@ -31,16 +32,20 @@ export function RowFormDialog({
   initial,
   initialVersion,
   submitting,
+  simulating,
   serverError,
   onSubmit,
+  onSimulate,
   onClose,
 }: {
   title: string;
   initial: ProjectFields | null;
   initialVersion?: number;
   submitting: boolean;
+  simulating: boolean;
   serverError: string | null;
   onSubmit: (input: ProjectFields) => void;
+  onSimulate: () => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState<FormState>(() => toFormState(initial));
@@ -53,14 +58,13 @@ export function RowFormDialog({
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
 
-    const rawAmount = form.amount.trim();
-    const amount = rawAmount === "" ? Number.NaN : Number(rawAmount);
-    if (Number.isNaN(amount)) {
-      setErrors({ amount: "金額必須是數字" });
+    const parsedAmount = parseAmountInput(form.amount);
+    if ("error" in parsedAmount) {
+      setErrors({ amount: parsedAmount.error });
       return;
     }
 
-    const parsed = projectFieldsSchema.safeParse({ ...form, amount });
+    const parsed = projectFieldsSchema.safeParse({ ...form, amount: parsedAmount.value });
     if (!parsed.success) {
       const fieldErrors = parsed.error.flatten().fieldErrors;
       const nextErrors: Record<string, string> = {};
@@ -151,6 +155,14 @@ export function RowFormDialog({
             {initialVersion ? `版本 ${initialVersion}` : "建立後版本為 1"}
           </span>
           <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onSimulate}
+              disabled={submitting || simulating}
+            >
+              {simulating ? "模擬中…" : "模擬外部修改"}
+            </Button>
             <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
               取消
             </Button>

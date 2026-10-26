@@ -72,6 +72,7 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
 
     let cancelled = false;
     setAuditLoading(true);
+    setAuditEvents([]);
     api
       .audit(selectedRowId)
       .then(({ events }) => {
@@ -105,7 +106,8 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
     setForm({ mode: "edit", row, base: pickFields(row) });
   }
 
-  async function handleSimulateExternal() {    const target = selectedRowId ?? filteredRows[0]?._row_id;
+  async function handleSimulateExternal(targetOverride?: string) {
+    const target = targetOverride ?? selectedRowId ?? filteredRows[0]?._row_id;
     if (!target) {
       setNotice("目前沒有可修改的列");
       return;
@@ -226,7 +228,7 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
             {lastSyncedAt ? formatDateTime(lastSyncedAt) : "—"}
           </p>
         </div>
-        <Button variant="ghost" onClick={handleSimulateExternal} disabled={simulating}>
+        <Button variant="ghost" onClick={() => handleSimulateExternal()} disabled={simulating}>
           {simulating ? "模擬中…" : "模擬外部修改"}
         </Button>
       </header>
@@ -289,8 +291,12 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
           initial={form.mode === "edit" ? form.base : null}
           initialVersion={form.mode === "edit" ? form.row._version : undefined}
           submitting={submitting}
+          simulating={simulating}
           serverError={formError}
           onSubmit={handleSubmitForm}
+          onSimulate={() => {
+            if (form.mode === "edit") void handleSimulateExternal(form.row._row_id);
+          }}
           onClose={() => {
             if (!submitting) setForm(null);
           }}
