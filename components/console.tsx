@@ -13,6 +13,7 @@ import {
   type RowView,
 } from "@/lib/schema";
 import { DataTable } from "./data-table";
+import { ConflictDialog } from "./conflict-dialog";
 import { RowFormDialog } from "./row-form-dialog";
 import { Button, Input, Select } from "./ui";
 
@@ -44,6 +45,7 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null);
+  const [resolving, setResolving] = useState(false);
 
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -138,6 +140,51 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
     }
   }
 
+  async function handleKeepMine() {
+    const active = pendingConflict;
+    if (!active) return;
+
+    setResolving(true);
+    try {
+      await api.update(active.rowId, {
+        ...active.mine,
+        version: active.conflict.current._version,
+        baseHash: active.conflict.current.content_hash,
+        resolveConflict: true,
+      });
+      await refresh();
+      setSelectedRowId(active.rowId);
+      setPendingConflict(null);
+      setNotice("已保留我的版本");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && error.conflict) {
+        setPendingConflict({ ...active, conflict: error.conflict });
+        setNotice("此列又被修改，請重新選擇要保留的版本");
+        return;
+      }
+      setNotice(error instanceof ApiError ? error.message : "解決衝突失敗");
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  async function handleKeepSheet() {
+    const active = pendingConflict;
+    if (!active) return;
+
+    setResolving(true);
+    try {
+      await refresh();
+      setSelectedRowId(active.rowId);
+      setPendingConflict(null);
+      setNotice("已改用 Sheet 版本");
+    } catch (error) {
+      setNotice(error instanceof ApiError ? error.message : "重新載入失敗");
+    } finally {
+      setResolving(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-7xl p-6">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -211,9 +258,19 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
       ) : null}
 
       {pendingConflict ? (
-        <p className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md bg-amber-100 px-4 py-2 text-sm text-amber-900 shadow">
-          衝突待處理：版本 {pendingConflict.conflict.current._version}
-        </p>
+        <ConflictDialog
+          base={pendingConflict.base}
+          mine={pendingConflict.mine}
+          conflict={pendingConflict.conflict}
+          submitting={resolving}
+          onKeepMine={handleKeepMine}
+          onKeepSheet={handleKeepSheet}
+          onClose={() => {
+            if (resolving) return;
+            setPendingConflict(null);
+            setNotice("已暫緩處理衝突，請重新整理後再編輯");
+          }}
+        />
       ) : null}
     </div>
   );
