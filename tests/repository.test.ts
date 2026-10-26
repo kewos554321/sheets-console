@@ -38,37 +38,40 @@ describe("種子資料", () => {
 });
 
 describe("list / get / create", () => {
-  it("list 回傳 1000 列並附 content_hash 與 stale", () => {
-    const rows = repo.list();
+  it("list 回傳 1000 列並附 content_hash 與 stale", async () => {
+    const rows = await repo.list();
     expect(rows).toHaveLength(1000);
     expect(rows[0].content_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(rows[0].stale).toBe(false);
   });
 
-  it("get 找不到回傳 undefined", () => {
-    expect(repo.get("missing")).toBeUndefined();
+  it("get 找不到回傳 undefined", async () => {
+    expect(await repo.get("missing")).toBeUndefined();
   });
 
-  it("create 產生 version 1、稽核與可查到的列", () => {
-    const result = repo.create(input, "demo@example.com", "op-1");
+  it("create 產生 version 1、稽核與可查到的列", async () => {
+    const result = await repo.create(input, "demo@example.com", "op-1");
     expect(result.row._version).toBe(1);
     expect(result.row._row_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(result.audit?.action).toBe("create");
     expect(result.audit?.diff).toHaveLength(6);
-    expect(repo.list()).toHaveLength(1001);
-    expect(repo.get(result.row._row_id)?.project_name).toBe("官網改版");
+    expect(await repo.list()).toHaveLength(1001);
+    expect((await repo.get(result.row._row_id))?.project_name).toBe("官網改版");
   });
 
-  it("lastSyncedAt 回傳最新 _updated_at", () => {
-    const latest = repo.list().map((row) => row._updated_at).sort().at(-1);
-    expect(repo.lastSyncedAt()).toBe(latest);
+  it("lastSyncedAt 回傳最新 _updated_at", async () => {
+    const latest = (await repo.list())
+      .map((row) => row._updated_at)
+      .sort()
+      .at(-1);
+    expect(await repo.lastSyncedAt()).toBe(latest);
   });
 });
 
 describe("update 樂觀鎖", () => {
-  it("版本相符時寫入、版本 +1、產生 update 稽核", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
-    const result = repo.update(
+  it("版本相符時寫入、版本 +1、產生 update 稽核", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
+    const result = await repo.update(
       created._row_id,
       { ...input, status: "done", version: created._version, baseHash: created.content_hash },
       "demo@example.com",
@@ -80,28 +83,43 @@ describe("update 樂觀鎖", () => {
     expect(result.audit?.diff).toEqual([{ field: "status", before: "active", after: "done" }]);
   });
 
-  it("版本過期時丟 VersionConflictError 且不改資料", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
-    repo.update(created._row_id, { ...input, status: "done", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-2");
-    expect(() =>
-      repo.update(created._row_id, { ...input, status: "blocked", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-3"),
-    ).toThrowError(/VERSION_CONFLICT/);
-    expect(repo.get(created._row_id)?.status).toBe("done");
+  it("版本過期時丟 VersionConflictError 且不改資料", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
+    await repo.update(
+      created._row_id,
+      { ...input, status: "done", version: 1, baseHash: created.content_hash },
+      "demo@example.com",
+      "op-2",
+    );
+    await expect(
+      repo.update(
+        created._row_id,
+        { ...input, status: "blocked", version: 1, baseHash: created.content_hash },
+        "demo@example.com",
+        "op-3",
+      ),
+    ).rejects.toThrowError(/VERSION_CONFLICT/);
+    expect((await repo.get(created._row_id))?.status).toBe("done");
   });
 
-  it("版本相同但 baseHash 過期時仍衝突（外部改過其他欄位）", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
+  it("版本相同但 baseHash 過期時仍衝突（外部改過其他欄位）", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
     getStore().rows.set(created._row_id, { ...getStore().rows.get(created._row_id)!, notes: "Sheet 直接改" });
-    expect(() =>
-      repo.update(created._row_id, { ...input, amount: 1, version: 1, baseHash: created.content_hash }, "demo@example.com", "op-2"),
-    ).toThrowError(/VERSION_CONFLICT/);
-    expect(repo.get(created._row_id)?.amount).toBe(120000);
+    await expect(
+      repo.update(
+        created._row_id,
+        { ...input, amount: 1, version: 1, baseHash: created.content_hash },
+        "demo@example.com",
+        "op-2",
+      ),
+    ).rejects.toThrowError(/VERSION_CONFLICT/);
+    expect((await repo.get(created._row_id))?.amount).toBe(120000);
   });
 
-  it("無變更回 200 語意：不遞增版本、不寫稽核", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
-    const beforeAudits = repo.audit(created._row_id).length;
-    const result = repo.update(
+  it("無變更回 200 語意：不遞增版本、不寫稽核", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
+    const beforeAudits = (await repo.audit(created._row_id)).length;
+    const result = await repo.update(
       created._row_id,
       { ...input, version: 1, baseHash: created.content_hash },
       "demo@example.com",
@@ -109,26 +127,38 @@ describe("update 樂觀鎖", () => {
     );
     expect(result.row._version).toBe(1);
     expect(result.audit).toBeNull();
-    expect(repo.audit(created._row_id)).toHaveLength(beforeAudits);
+    expect(await repo.audit(created._row_id)).toHaveLength(beforeAudits);
   });
 
-  it("同一版本連續送出兩次，第二次衝突", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
-    repo.update(created._row_id, { ...input, status: "done", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-2");
-    expect(() =>
-      repo.update(created._row_id, { ...input, status: "blocked", version: 1, baseHash: created.content_hash }, "demo@example.com", "op-3"),
-    ).toThrowError(/VERSION_CONFLICT/);
+  it("同一版本連續送出兩次，第二次衝突", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
+    await repo.update(
+      created._row_id,
+      { ...input, status: "done", version: 1, baseHash: created.content_hash },
+      "demo@example.com",
+      "op-2",
+    );
+    await expect(
+      repo.update(
+        created._row_id,
+        { ...input, status: "blocked", version: 1, baseHash: created.content_hash },
+        "demo@example.com",
+        "op-3",
+      ),
+    ).rejects.toThrowError(/VERSION_CONFLICT/);
   });
 
-  it("找不到列丟 RowNotFoundError", () => {
-    expect(() => repo.update("missing", { ...input, version: 1, baseHash: "sha256:x" }, "demo@example.com", "op")).toThrowError(/ROW_NOT_FOUND/);
+  it("找不到列丟 RowNotFoundError", async () => {
+    await expect(
+      repo.update("missing", { ...input, version: 1, baseHash: "sha256:x" }, "demo@example.com", "op"),
+    ).rejects.toThrowError(/ROW_NOT_FOUND/);
   });
 });
 
 describe("simulateExternal", () => {
-  it("改變業務欄位但不遞增 _version，並留下 external 稽核", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
-    const result = repo.simulateExternal(created._row_id);
+  it("改變業務欄位但不遞增 _version，並留下 external 稽核", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
+    const result = await repo.simulateExternal(created._row_id);
     expect(result.row._version).toBe(1);
     expect(result.row.content_hash).not.toBe(created.content_hash);
     expect(result.row.status).not.toBe("active");
@@ -137,9 +167,9 @@ describe("simulateExternal", () => {
     expect(result.audit?.actorLabel).toBe("unknown (Sheet)");
   });
 
-  it("外部修改後，UI 以最新 version + hash 寫入即可清除 stale", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
-    const external = repo.simulateExternal(created._row_id).row;
+  it("外部修改後，UI 以最新 version + hash 寫入即可清除 stale", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
+    const external = (await repo.simulateExternal(created._row_id)).row;
     const mine = {
       project_name: external.project_name,
       client: external.client,
@@ -148,7 +178,7 @@ describe("simulateExternal", () => {
       amount: external.amount,
       notes: "UI 補述",
     };
-    const result = repo.update(
+    const result = await repo.update(
       created._row_id,
       { ...mine, version: external._version, baseHash: external.content_hash },
       "demo@example.com",
@@ -158,10 +188,10 @@ describe("simulateExternal", () => {
     expect(result.row._version).toBe(2);
   });
 
-  it("audit 回傳新到舊", () => {
-    const created = repo.create(input, "demo@example.com", "op-1").row;
-    repo.simulateExternal(created._row_id);
-    const events = repo.audit(created._row_id);
+  it("audit 回傳新到舊", async () => {
+    const created = (await repo.create(input, "demo@example.com", "op-1")).row;
+    await repo.simulateExternal(created._row_id);
+    const events = await repo.audit(created._row_id);
     expect(events[0].source).toBe("external");
     expect(events[1].action).toBe("create");
   });

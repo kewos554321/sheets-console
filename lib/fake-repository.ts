@@ -22,16 +22,16 @@ export class FakeSheetRepository implements SheetRepository {
     return { ...row, content_hash: hashFields(row), stale };
   }
 
-  list(): RowView[] {
+  async list(): Promise<RowView[]> {
     return [...this.store.rows.values()].filter((row) => !row._deleted).map((row) => this.toView(row));
   }
 
-  get(rowId: string): RowView | undefined {
+  async get(rowId: string): Promise<RowView | undefined> {
     const row = this.store.rows.get(rowId);
     return row ? this.toView(row) : undefined;
   }
 
-  create(input: ProjectFields, actorLabel: string, opId: string): WriteResult {
+  async create(input: ProjectFields, actorLabel: string, opId: string): Promise<WriteResult> {
     const row: SheetRow = {
       ...input,
       _row_id: crypto.randomUUID(),
@@ -57,7 +57,7 @@ export class FakeSheetRepository implements SheetRepository {
     return { row: this.toView(row), audit };
   }
 
-  update(rowId: string, input: UpdateRowInput, actorLabel: string, opId: string): WriteResult {
+  async update(rowId: string, input: UpdateRowInput, actorLabel: string, opId: string): Promise<WriteResult> {
     const row = this.store.rows.get(rowId);
     if (!row) throw new RowNotFoundError(rowId);
 
@@ -97,7 +97,7 @@ export class FakeSheetRepository implements SheetRepository {
     return { row: this.toView(next), audit };
   }
 
-  simulateExternal(rowId: string): WriteResult {
+  async simulateExternal(rowId: string): Promise<WriteResult> {
     const row = this.store.rows.get(rowId);
     if (!row) throw new RowNotFoundError(rowId);
 
@@ -129,11 +129,11 @@ export class FakeSheetRepository implements SheetRepository {
     return { row: this.toView(next), audit };
   }
 
-  audit(rowId: string): AuditEvent[] {
+  async audit(rowId: string): Promise<AuditEvent[]> {
     return this.store.audits.filter((event) => event.rowId === rowId).slice().reverse();
   }
 
-  lastSyncedAt(): string | null {
+  async lastSyncedAt(): Promise<string | null> {
     let latest: string | null = null;
     for (const row of this.store.rows.values()) {
       if (!latest || row._updated_at > latest) latest = row._updated_at;

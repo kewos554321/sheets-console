@@ -17,9 +17,10 @@
 - ✅ 三欄衝突視窗（基準／我的／Sheet 目前），可保留我的或保留 Sheet
 - ✅ 每一次寫入都有稽核事件與欄位級 diff
 - ✅ 一鍵模擬「有人在 Sheet 直接修改」，會標記 stale 並在儲存時觸發衝突
+- ✅ 可切換成真實 Google Sheets（Service Account），見下方設定
 
-刻意不做：登入與角色、真實 Google Sheets adapter、Postgres/Drizzle、Apps Script/webhook、
-輪詢同步、快照與回滾、刪除。完整範圍見設計文件。
+刻意不做：登入與角色、Postgres/Drizzle 稽核、Apps Script/webhook、輪詢同步、快照與回滾、刪除。
+Google Sheets 可透過 Service Account 直連，但稽核事件仍只存在記憶體（重啟即失）。
 
 > ⚠️ 資料存在單一 process 的記憶體，重啟即重置，**不可部署到 Vercel 當正式服務**。
 > 這個 POC 只在本機驗證產品流程。
@@ -31,13 +32,58 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
+沒有 `.env.local` 時會以 fake 模式啟動（記憶體資料）。
+
 其他指令：
 
 ```bash
 npm test           # Vitest 單元與 API 測試
 npm run typecheck  # tsc --noEmit
 npm run build      # production build
+npm run sheets:setup   # 初始化 Google Sheet（header + 範例列）
+npm run sheets:verify  # 驗證 Google Sheets 連線與 schema
 ```
+
+## 接到你的 Google Sheet
+
+### 1. 建立 Service Account
+
+1. 到 [Google Cloud Console](https://console.cloud.google.com/) 建立專案。
+2. **APIs & Services → Library** 啟用 **Google Sheets API** 與 **Google Drive API**。
+3. **IAM & Admin → Service Accounts** 建立一個 Service Account。
+4. 進入該帳號 → **Keys → Add key → Create new key → JSON** 下載。
+5. 把 JSON 放到 `secrets/sa.json`。
+6. 打開 JSON 找 `client_email`，把該 email 加到你 Sheet 的「共用」，權限設為 **編輯者**。
+
+`secrets/` 與 `.env.local` 都不會被 commit。
+
+### 2. 設定環境變數
+
+```bash
+cp .env.example .env.local
+```
+
+編輯 `.env.local`，至少要有：
+
+```bash
+GOOGLE_SA_KEY_FILE=./secrets/sa.json
+SHEET_SPREADSHEET_ID=<你的 spreadsheet ID>
+SHEET_TAB_NAME=<分頁名稱>
+```
+
+也可以只填 key 與既有 Sheet 的 ID，分頁名稱留給 setup 腳本自動偵測。
+
+### 3. 初始化與驗證
+
+```bash
+npm run sheets:setup   # 空白分頁會寫入 header + 20 筆範例列
+npm run sheets:verify  # 檢查連線、header、列數
+npm run dev
+```
+
+`sheets:setup` 遇到已有資料的分頁會中止，不會覆蓋。若分頁不存在但整張表只有一個分頁，會自動使用該分頁名稱並寫回 `.env.local`。
+
+啟動後 Header 會顯示 `Google Sheet`；沒有設定時顯示 `Fake Sheets`。直接改 Google Sheet 後，按 UI 的「重新載入」即可看到最新資料。
 
 ## 五步驟示範
 
@@ -60,7 +106,7 @@ npm run build      # production build
 | 前端/後端 | Next.js App Router + TypeScript | 同左 |
 | UI | Tailwind CSS + TanStack Table | shadcn/ui + TanStack Table |
 | 驗證 | zod（前後端共用） | 同左 |
-| 資料層 | `SheetRepository` + in-memory fake | Google Sheets adapter |
+| 資料層 | `SheetRepository` + in-memory fake / Google Sheets adapter | Google Sheets adapter |
 | 控制層 | 記憶體（版本、稽核） | Postgres（Neon / Supabase）+ Drizzle |
 | 登入 | 無（固定 demo 身分） | Auth.js（Google） |
 | 部署 | 本機 | Vercel + GitHub |

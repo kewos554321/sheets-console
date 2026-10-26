@@ -1,10 +1,16 @@
 import { Console } from "@/components/console";
-import { FakeSheetRepository } from "@/lib/fake-repository";
-import { getStore } from "@/lib/store";
+import { getRepository, getRepositoryMode } from "@/lib/repository-factory";
 
 export const dynamic = "force-dynamic";
 
-export default function Page() {
-  const repo = new FakeSheetRepository(getStore());
-  return <Console initialRows={repo.list()} initialLastSyncedAt={repo.lastSyncedAt()} />;
+export default async function Page() {
+  const repo = getRepository();
+  const [rows, lastSyncedAt] = await Promise.all([repo.list(), repo.lastSyncedAt()]);
+  return (
+    <Console
+      initialRows={rows}
+      initialLastSyncedAt={lastSyncedAt}
+      dataSource={getRepositoryMode()}
+    />
+  );
 }

@@ -22,6 +22,7 @@ import { Button, Input, Select } from "./ui";
 type Props = {
   initialRows: RowView[];
   initialLastSyncedAt: string | null;
+  dataSource: "google" | "fake";
 };
 
 type FormState =
@@ -35,7 +36,7 @@ type PendingConflict = {
   conflict: ConflictPayload["conflict"];
 };
 
-export function Console({ initialRows, initialLastSyncedAt }: Props) {
+export function Console({ initialRows, initialLastSyncedAt, dataSource }: Props) {
   const [rows, setRows] = useState<RowView[]>(initialRows);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(initialLastSyncedAt);
   const [query, setQuery] = useState("");
@@ -43,6 +44,7 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [simulating, setSimulating] = useState(false);
+  const [reloading, setReloading] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -104,6 +106,18 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
     setSelectedRowId(rowId);
     setFormError(null);
     setForm({ mode: "edit", row, base: pickFields(row) });
+  }
+
+  async function handleReload() {
+    setReloading(true);
+    try {
+      await refresh();
+      setNotice("已重新載入");
+    } catch (error) {
+      setNotice(error instanceof ApiError ? error.message : "重新載入失敗");
+    } finally {
+      setReloading(false);
+    }
   }
 
   async function handleSimulateExternal(targetOverride?: string) {
@@ -224,13 +238,18 @@ export function Console({ initialRows, initialLastSyncedAt }: Props) {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Sheets Console</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Fake Sheets · {rows.length} rows · 最後同步{" "}
+            {dataSource === "google" ? "Google Sheet" : "Fake Sheets"} · {rows.length} rows · 最後同步{" "}
             {lastSyncedAt ? formatDateTime(lastSyncedAt) : "—"}
           </p>
         </div>
-        <Button variant="ghost" onClick={() => handleSimulateExternal()} disabled={simulating}>
-          {simulating ? "模擬中…" : "模擬外部修改"}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={handleReload} disabled={reloading}>
+            {reloading ? "載入中…" : "重新載入"}
+          </Button>
+          <Button variant="ghost" onClick={() => handleSimulateExternal()} disabled={simulating}>
+            {simulating ? "模擬中…" : "模擬外部修改"}
+          </Button>
+        </div>
       </header>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">

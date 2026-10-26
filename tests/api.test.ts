@@ -3,6 +3,7 @@ import { POST as createRow } from "@/app/api/rows/route";
 import { PATCH as updateRow } from "@/app/api/rows/[rowId]/route";
 import { POST as simulateExternal } from "@/app/api/rows/[rowId]/simulate-external/route";
 import { GET as getAudit } from "@/app/api/audit/route";
+import { resetRepositoryForTests } from "@/lib/repository-factory";
 import { resetStore } from "@/lib/store";
 
 const valid = {
@@ -27,7 +28,10 @@ async function createTestRow() {
   return (await res.json()) as { row: { _row_id: string; _version: number; content_hash: string } };
 }
 
-beforeEach(() => resetStore());
+beforeEach(() => {
+  resetStore();
+  resetRepositoryForTests();
+});
 
 describe("route handlers", () => {
   it("POST /api/rows 回 201 與稽核", async () => {

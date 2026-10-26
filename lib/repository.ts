@@ -25,11 +25,11 @@ export type WriteResult = {
 };
 
 export interface SheetRepository {
-  list(): RowView[];
-  get(rowId: string): RowView | undefined;
-  create(input: ProjectFields, actorLabel: string, opId: string): WriteResult;
-  update(rowId: string, input: UpdateRowInput, actorLabel: string, opId: string): WriteResult;
-  simulateExternal(rowId: string): WriteResult;
-  audit(rowId: string): AuditEvent[];
-  lastSyncedAt(): string | null;
+  list(): Promise<RowView[]>;
+  get(rowId: string): Promise<RowView | undefined>;
+  create(input: ProjectFields, actorLabel: string, opId: string): Promise<WriteResult>;
+  update(rowId: string, input: UpdateRowInput, actorLabel: string, opId: string): Promise<WriteResult>;
+  simulateExternal(rowId: string): Promise<WriteResult>;
+  audit(rowId: string): Promise<AuditEvent[]>;
+  lastSyncedAt(): Promise<string | null>;
 }
