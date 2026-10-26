@@ -82,6 +82,12 @@ SheetRepository（port）
 | `_op_id` | 每次寫入產生的 UUID，供未來回音抑制使用 |
 | `_deleted` | 保留欄位，POC 固定 `false` |
 
+### 4.2.1 Content hash（row_index 投影）
+
+POC 不把 hash 寫進 Sheet 列，而是由 repository 依業務欄位計算 `content_hash`（SHA-256，欄位順序固定），
+並在 API 回傳的 `RowView` 上附帶。這對應 PLAN 中 Postgres `row_index.content_hash` 的角色：
+即使外部修改者沒有遞增 `_version`，只要內容變了，hash 就會不同。
+
 ### 4.3 稽核事件
 
 ```ts
@@ -113,7 +119,7 @@ type AuditEvent = {
 |---|---|---|
 | `GET` | `/api/rows` | 回傳全部未刪除列；搜尋、排序、分頁皆在 client 端處理，伺服器不接受查詢參數 |
 | `POST` | `/api/rows` | 建立列，回傳新列 |
-| `PATCH` | `/api/rows/[rowId]` | 更新，body 需含 `version` 與業務欄位 |
+| `PATCH` | `/api/rows/[rowId]` | 更新，body 需含 `version`、`baseHash` 與全部業務欄位 |
 | `POST` | `/api/rows/[rowId]/simulate-external` | 模擬 Sheet 被直接修改 |
 | `GET` | `/api/audit?rowId=` | 回傳該列稽核事件，新到舊 |
 
@@ -121,18 +127,23 @@ type AuditEvent = {
 
 1. zod 驗證 body；失敗 → `400 VALIDATION_ERROR`，附欄位錯誤。
 2. 找不到列 → `404 ROW_NOT_FOUND`。
-3. `version` 與目前 `_version` 不符 → `409 VERSION_CONFLICT`，body：
+3. 版本或內容不符 → `409 VERSION_CONFLICT`。判定條件（任一成立）：
+   - body `version` ≠ 目前 `_version`；
+   - body `baseHash` ≠ 目前 `content_hash`（攔截「改了內容但沒遞增版本」的外部編輯）。
 
 ```json
 {
   "error": { "code": "VERSION_CONFLICT", "message": "..." },
   "conflict": {
     "baseVersion": 3,
+    "baseHash": "sha256:...",
     "mine": { "project_name": "...", "status": "..." },
-    "current": { "project_name": "...", "status": "...", "_version": 4 }
+    "current": { "project_name": "...", "status": "...", "_version": 3, "content_hash": "sha256:..." }
   }
 }
 ```
+
+`baseVersion`／`baseHash` 是 client 送出時所依據的版本，`current` 是伺服器當下完整列。
 
 4. 相符 → 寫入、`_version + 1`、記錄稽核 `action=update`（或 `resolve_conflict`，當 body 帶
    `resolveConflict: true`）。
@@ -150,13 +161,14 @@ type AuditEvent = {
 ### 5.3 Stale 判定
 
 POC 以「該列存在 `source=external` 且時間晚於最後一次 UI 寫入」作為 stale 標記，並在列上顯示。
-編輯對話框開啟時會攜帶當時的 `_version`，因此 stale 列儲存時會自然觸發 409。
+編輯對話框開啟時會攜帶當時的 `_version` 與 `content_hash`（`baseHash`），因此 stale 列儲存時
+必定觸發 409——即使外部修改沒有遞增版本。
 
 ## 6. UI 結構
 
 單一路由 `/`，分為四個區塊：
 
-1. **Header**：標題、資料來源說明（`Fake Sheets · 1000 rows`）、最後同步時間（最近一次寫入的
+1. **Header**：標題、資料來源說明（`Fake Sheets · {rows.length} rows`）、最後同步時間（最近一次寫入的
    `_updated_at`）、模擬外部修改按鈕（有選取列時打該列，否則隨機一列）。
 2. **Toolbar**：搜尋框（專案/客戶/負責人）、狀態篩選、新增按鈕。
 3. **Table**：TanStack Table，欄位為專案、客戶、狀態、負責人、金額、更新時間；
@@ -193,28 +205,35 @@ components/
   ui.tsx                小型共用按鈕/輸入/徽章
 lib/
   schema.ts             zod schema、型別、欄位定義
-  repository.ts         SheetRepository 介面
+  hash.ts               業務欄位 content hash
+  repository.ts         SheetRepository 介面與錯誤型別
   fake-repository.ts    in-memory 實作
-  seed.ts               1000 列種子資料
+  seed.ts               1000 列決定性種子資料
   diff.ts               欄位 diff 計算
-  store.ts              globalThis singleton
+  audit.ts              稽核事件組裝
+  conflict.ts           409 payload 組裝
+  store.ts              globalThis singleton 與 reset
   api.ts               client 端 fetch 輔助
 tests/
   schema.test.ts
+  hash.test.ts
   diff.test.ts
-  fake-repository.test.ts
-  conflict.test.ts      版本比對與衝突 payload
+  repository.test.ts    建立/版本/hash/外部/stale
+  conflict.test.ts      409 payload
+  api.test.ts           Route Handler 的 201/400/404/409
 ```
 
 ## 8. 測試策略
 
 單元測試（Vitest）：
 
-1. `rowInputSchema`：必填、長度、金額非負、狀態 enum。
-2. `diffRows`：只回傳變更欄位；新增與無變更的邊界。
-3. `FakeSheetRepository`：建立/更新遞增版本、版本不符丟出 conflict、外部模擬不遞增版本。
-4. 衝突 payload 組裝：base/mine/current 正確。
-5. 稽核：更新事件含正確 diff；無變更不產生事件。
+1. `rowInputSchema`：必填、長度、金額非負整數（拒絕 `"12,000"` 與 `NaN`）、狀態 enum。
+2. `diffFields`：只回傳變更欄位；新增與無變更的邊界。
+3. `FakeSheetRepository`：建立/更新遞增版本、版本不符丟出 conflict、外部模擬不遞增版本、
+   「版本相同但內容被外部改過」仍丟 conflict、無變更不寫稽核。
+4. 衝突 payload 組裝：base/current 與 hash 正確。
+5. Route Handler：201/400/404/409 與稽核寫入。
+6. 種子資料：1000 列且 `_row_id` 決定性（重啟後穩定）。
 
 不寫 E2E；以手動驗收清單補足（見 §9）。
 
@@ -225,6 +244,7 @@ tests/
 - [ ] 新增列成功，稽核出現 `create`。
 - [ ] 編輯成功，版本 +1，稽核出現 `update` 與欄位 diff。
 - [ ] 開著編輯框時按「模擬外部修改」，儲存 → 出現 409 衝突視窗。
+- [ ] 外部修改後，即使只改其他欄位再儲存 → 仍出現 409（hash 攔截）。
 - [ ] 衝突視窗選「保留我的」→ 寫入成功，稽核為 `resolve_conflict`。
 - [ ] 衝突視窗選「保留 Sheet」→ 資料回到 Sheet 版本，無新寫入。
 - [ ] `npm test` 全綠、`npm run build` 成功。
